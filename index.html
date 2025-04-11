@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="shortcut icon" type="image/png" href="favicon.ico">
+    <link rel="apple-touch-icon" sizes="192x192" href="192x192_App_Icon.png">
+    <link rel="apple-touch-icon" sizes="512x512" href="512x512_App_Icon.png">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kodia Swap Explorer</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="h-full bg-white dark:bg-gray-900 transition-colors duration-300">
+    <div id="app" :class="{'dark': isDarkMode}" class="min-h-screen transition-colors duration-300">
+        <!-- 头部控制栏 -->
+        <header class="dark:bg-gray-900 bg-gray-100 p-4 flex justify-between items-center shadow-md">
+            <!-- 左侧：流动池选择器 -->
+            <div class="flex-1 max-w-xs">
+                <select v-model="selectedPool" @change="handlePoolChange" class="bg-white text-gray-900 border-gray-300  /* 新增亮色模式基础样式 */
+              dark:bg-gray-800 dark:text-white dark:border-gray-600
+              p-2 rounded-lg w-48 border-2  /* 加粗边框 */
+              mobile:w-32 focus:ring-2 focus:ring-blue-300  /* 添加聚焦效果 */
+              transition-colors duration-200"> <!-- 添加过渡效果 -->
+                    <option v-for="pool in pools" :value="pool.id" class="bg-white dark:bg-gray-800"> <!-- 添加选项背景色 -->
+                        {{ pool.token0Symbol }}/{{ pool.token1Symbol }} {{ pool.feeTier }}
+                    </option>
+                </select>
+            </div>
+            <!-- 中间：刷新按钮 -->
+            <div class="mx-4">
+                <button @click="manualRefresh" class="p-2 rounded-full transition-colors">
+                    <svg id="refresh-icon" :key="refreshKey" class="w-6 h-6 text-blue-500 dark:text-blue-400"
+                        :class="{ 'animate-spin': isLoading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                </button>
+            </div>
+            <!-- 右侧：功能按钮组 -->
+            <div class="flex items-center gap-3">
+                <!-- 暗黑模式切换 -->
+                <button @click="toggleDarkMode" class="dark:bg-gray-700 bg-gray-200 p-2 rounded-full">
+                    <span class="material-icons">{{ isDarkMode ? '🌞' : '🌙' }}</span>
+                </button>
+            </div>
+        </header>
+
+        <main class="p-4 max-w-6xl mx-auto h-[calc(100vh-80px)]">
+            <!-- 交易历史 -->
+            <div v-for="swap in filteredSwaps" :key="swap.transaction.id"
+                class="dark:bg-gray-800 bg-white rounded-lg p-4 mb-4 shadow-md hover:shadow-lg transition-shadow">
+                <a :href="`https://explorer.flame.astria.org/tx/${swap.transaction.id}`" target="_blank"
+                    class="block dark:text-blue-400 text-blue-600 hover:underline">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-gray-600 dark:text-gray-400 text-sm">
+                            {{ getTimeDisplay(swap.timestamp) }}
+                        </span>
+                        <span class="text-sm dark:text-gray-400">
+                            {{ truncateAddress(swap.origin) }}
+                        </span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <!-- 左侧负数显示 -->
+                        <div class="text-red-500 text-left flex-1">
+                            <template v-for="amount in [swap.amount0, swap.amount1]">
+                                <div v-if="parseFloat(amount) < 0" :key="amount" class="mb-1 last:mb-0">
+                                    {{ amount }} {{ amount === swap.amount0 ? swap.pool.token0Symbol :
+                                    swap.pool.token1Symbol }}
+                                </div>
+                            </template>
+                        </div>
+
+                        <div class="text-mid">
+                            <p class="text-sm font-mono">
+                                {{ calculatePrice(swap) }}
+                            </p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                {{ swap.pool.token0Symbol }}/{{ swap.pool.token1Symbol }}
+                            </p>
+                        </div>
+
+                        <!-- 右侧正数显示 -->
+                        <div class="text-green-500 text-right flex-1">
+                            <template v-for="amount in [swap.amount0, swap.amount1]">
+                                <div v-if="parseFloat(amount) > 0" :key="amount" class="mb-1 last:mb-0">
+                                    +{{ Math.abs(amount) }} {{ amount === swap.amount0 ? swap.pool.token0Symbol :
+                                    swap.pool.token1Symbol }}
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                    <!-- <div class="text-right">
+                        <p class="text-sm font-mono">
+                            {{ calculatePrice(swap) }}
+                        </p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                            {{ swap.pool.token0Symbol }}/{{ swap.pool.token1Symbol }}
+                        </p>
+                    </div> -->
+                </a>
+            </div>
+            <div v-if="loading" class="text-center dark:text-gray-400">加载中...</div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        // 通用GraphQL请求方法
+        async function graphqlRequest(operationName, query, variables = {}) {
+            try {
+                const response = await fetch('https://api.goldsky.com/api/public/project_clpx84oel0al201r78jsl0r3i/subgraphs/kodiak-v3-berachain-mainnet/latest/gn', {
+                    method: 'POST',
+                    headers: {
+                        'accept': '*/*',
+                        'content-type': 'application/json',
+                        'origin': 'https://v3.info.kodiak.finance',
+                        'referer': 'https://v3.info.kodiak.finance/'
+                    },
+                    body: JSON.stringify({
+                        operationName: operationName,
+                        query: query,
+                        variables: variables
+                    })
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                return await response.json();
+
+            } catch (error) {
+                console.error('GraphQL请求失败:', error);
+                throw error;
+            }
+        }
+
+        // 更新后的池子查询
+        const POOLS_QUERY = `
+            query pools {
+                pools(
+                    where: {id_in: [
+                        "0x1127f801cb3ab7bdf8923272949aa7dba94b5805", 
+                        "0x1505e3f53519ebe76f0b5f8edcd3bf685799e4df", 
+                        "0x8382fbcebef31da752c72885a61d4416f342c6c8", 
+                        "0x75159c541bd49b1b6c51f5f3e796579e7cccb071", 
+                        "0x02eeb6edc9f0d9b19742266fd7a4621267510710", 
+                        "0x3c098ca2e84143742a7dcec3a341cabdd706412b", 
+                        "0xd6d83e479359766f21a63b20d6af43a138356eba", 
+                        "0x4b29f7526d075e55b283c589b773aeff6fbaa2c1", 
+                        "0x36815beb3494c6ad3a33540cc242d0b563fe91c0", 
+                        "0xcb7142f79d4ec5329a6a99bc9aaac84525652426", 
+                        "0x9e4c460645b39628c631003eb9911651d5441dd8", 
+                        "0xcffe3649a78a84a1c4ad9417aa041c2c52379ace", 
+                        "0x9eb897d400f245e151dafd4c81176397d7798c9c", 
+                        "0x73210851321c39f476a8a5be98abc54e51109cb8", 
+                        "0x545bea6ea7f8fd8dcc5c9a6802a8ebf3dbfc1c6e", 
+                        "0x7eb91777376b65611076df26c36f843418fe69d2", 
+                        "0x12bf773f18cec56f14e7cb91d82984ef5a3148ee", 
+                        "0x7f3f3b8fc1c65c042f3fc50e107641b4f73167ca", 
+                        "0x7b29fd049ed07c21038f1bc6aa85071961ba51ff", 
+                        "0x54577c10dee86be94daf4706224cf5952d54c191", 
+                        "0x07fe2ff6c62ff2aaf3892f75a22b9059a9f2273a", 
+                        "0xec2411329487619ec698a27743f168ca133af296", 
+                        "0xfcb24b3b7e87e3810b150d25d5964c566d9a2b6f", 
+                        "0x610d4f0eca45cb04cc576bed0e547139213720e9", 
+                        "0xaab6bbe4d679dc6fede61392d4e06b77b32fd74b", 
+                        "0x56a5ac11ba0f2c6b887d3e3aa154e3dd9859eac2", 
+                        "0xddd01143bf7639b40c7063a9376052fb9a7dd640", 
+                        "0xcda0ca7c3a609773067261d86e817bf777a2870d", 
+                        "0xe8e7b2f176ae6e9eea745dd25b30d2e13a982441", 
+                        "0x8dba608617ada150a4f30cb432441620d7e532a0", 
+                        "0xd8ab2dad071a63e6886e7db757ce106b4d76698e", 
+                        "0x1a2a927f758ae242fb967481cf293d2a36883be6", 
+                        "0x7fcdeabcee1608f5d72cfda67ceaea3e83fcd488", 
+                        "0xe628d519a21b4e1571e27b675f66a576af51344e", 
+                        "0x12d93d6c8fa73d2ee10f4af79e020b5f287d83d3", 
+                        "0x52203690a4037a58a2ab75b1e59f1b8a167da747", 
+                        "0xf065f7ccf54ef8596fe77a4836d963d5af84eb5d", 
+                        "0xf4d9e842a5d388758ad6d48b1e4739224cd8fa94", 
+                        "0xd5a19bfadffca8f3f5d71aa8974adbdbdcf577b5", 
+                        "0x357817efaed68bd1ccc9034e963485040a822a8b", 
+                        "0xe457b56a1f9379b604dfbce809da6fea1dece717", 
+                        "0xa2e5916f79df8f4b1f2a7e1321c74e08e79bb4eb", 
+                        "0xa91576253fed7a4647c3c9638468c656d0fa6457", 
+                        "0x51f92915e44bb9d7f90f59c9ce559f09e338e7e9", 
+                        "0xb16ffd445d3c785476f87017b79423ec9057406b", 
+                        "0xd52fefe5b7ee099514c971bb87f318b51d098db9", 
+                        "0xad6ca17ddac740005f3cde58d3d0e223b21129b2", 
+                        "0x086b7fe2bcb6e34d1c8d338f9af1d1d33776c6c0", 
+                        "0x6d016ab1e7cf4bdd387f9f7e65c19b5b04d88bb6", 
+                        "0x5bb06b78a434ed297cd474ebc79c28a20c20e5cd"
+                    ]}
+                    orderBy: totalValueLockedUSD
+                    orderDirection: desc
+                    subgraphError: allow
+                ) {
+                    id
+                    feeTier
+                    token0 { symbol }
+                    token1 { symbol }
+                    totalValueLockedUSD
+                }
+            }
+        `;
+
+        // 交易历史查询
+        const TRANSACTIONS_QUERY = `
+            query poolTransactions($address: String) {
+                swaps(
+                    first: 1000
+                    orderBy: timestamp
+                    orderDirection: desc
+                    where: {pool: $address}
+                    subgraphError: allow
+                ) {
+                    timestamp
+                    transaction {
+                        id
+                        __typename
+                    }
+                    pool {
+                        token0 {
+                            id
+                            symbol
+                            __typename
+                        }
+                        token1 {
+                            id
+                            symbol
+                            __typename
+                        }
+                        __typename
+                    }
+                    origin
+                    amount0
+                    amount1
+                    amountUSD
+                    __typename
+                }
+            }
+        `;
+
+        createApp({
+            data() {
+                return {
+                    refreshKey: 0, // 新增刷新按钮动画控制密钥,强制重新创建SVG元素
+                    currentTime: Date.now(),
+                    isDarkMode: true,
+                    pools: [],
+                    selectedPool: null,
+                    swaps: [],
+                    page: 1,
+                    loading: false,
+                    isDarkMode: localStorage.getItem('darkMode') === 'true' ||
+                        (window.matchMedia('(prefers-color-scheme: dark)').matches &&
+                            !localStorage.getItem('darkMode')),
+                }
+            },
+            mounted() {
+                // 启动时间更新定时器
+                this.timeInterval = setInterval(() => {
+                    this.currentTime = Date.now();
+                }, 1000);
+            },
+            beforeUnmount() {
+                clearInterval(this.timeInterval);
+            },
+            computed: {
+                filteredSwaps() {
+                    return this.swaps.filter(s =>
+                        this.selectedPool ? s.pool.id === this.selectedPool : true
+                    );
+                }
+            },
+            watch: {
+                isDarkMode(newVal) {
+                    this.applyDarkMode(newVal);
+                }
+            },
+            async mounted() {
+                this.applyDarkMode(this.isDarkMode);
+                await this.loadPools();
+                await this.loadSwaps();
+            },
+            methods: {
+                // 新增change事件处理
+                handlePoolChange(event) {
+                    console.log(this.selectedPool);
+                    // 显示加载状态
+                    this.isLoading = true;
+
+                    // 清空当前数据
+                    this.swaps = [];
+
+                    // 更新浏览器历史记录
+                    const newURL = new URL(window.location.href);
+                    newURL.searchParams.set('pool', this.selectedPool);
+                    window.history.replaceState({}, '', newURL);
+
+                    // 发起数据请求
+                    this.loadSwaps(true).finally(() => {
+                        // 隐藏加载状态
+                        this.isLoading = false;
+                    });
+                },
+
+                async loadPools() {
+                    try {
+                        const { data } = await graphqlRequest('pools', POOLS_QUERY);
+
+                        this.pools = data.pools.map(pool => ({
+                            id: pool.id,
+                            token0Symbol: pool.token0.symbol,
+                            token1Symbol: pool.token1.symbol,
+                            feeTier: this.formatFeeTier(pool.feeTier),
+                            tvl: parseFloat(pool.totalValueLockedUSD).toFixed(2)
+                        }));
+
+                        if (this.pools.length) {
+                            this.selectedPool = "0x1127f801cb3ab7bdf8923272949aa7dba94b5805";
+                            this.$nextTick(() => {
+                                this.loadSwaps(); // 自动加载首个池子的交易记录
+                            });
+                        }
+                    } catch (error) {
+                        console.error('加载流动池失败:', error);
+                        alert('流动池加载失败，请刷新重试');
+                    }
+                },
+
+                formatFeeTier(feeTier) {
+                    const feeMap = {
+                        '100': '0.01%',
+                        '500': '0.05%',
+                        '3000': '0.3%',
+                        '10000': '1%'
+                    };
+                    return feeMap[feeTier] || `${Number(feeTier) / 10000}%`;
+                },
+
+                async loadSwaps(isRefresh = false) {
+                    if (isRefresh) {
+                        this.swaps = [];
+                    }
+                    if (this.loading || !this.selectedPool) return;
+
+                    this.loading = true;
+                    try {
+                        const { data } = await graphqlRequest(
+                            'poolTransactions',
+                            TRANSACTIONS_QUERY,
+                            {
+                                address: this.selectedPool,
+                            }
+                        );
+
+                        const newSwaps = data.swaps.map(swap => this.normalizeSwap(swap));
+
+                        if (newSwaps.length) {
+                            this.swaps = [...this.swaps, ...newSwaps];
+                        }
+                    } catch (error) {
+                        console.error('加载交易失败:', error);
+                        alert('交易记录加载失败');
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                normalizeSwap(swap) {
+                    return {
+                        transaction: { id: swap.transaction.id },
+                        timestamp: parseInt(swap.timestamp),
+                        // 所有数值取反
+                        amount0: this.formatAmount(-swap.amount0),
+                        amount1: this.formatAmount(-swap.amount1),
+                        amountUSD: parseFloat(swap.amountUSD).toFixed(2),
+                        origin: swap.origin,
+                        pool: {
+                            id: this.selectedPool,
+                            token0Symbol: swap.pool.token0.symbol,
+                            token1Symbol: swap.pool.token1.symbol
+                        }
+                    }
+                },
+
+                formatAmount(amount) {
+                    const value = parseFloat(amount);
+                    return Math.abs(value) > 1
+                        ? value.toFixed(2)
+                        : value.toFixed(6);
+                },
+
+                truncateAddress(address) {
+                    if (window.innerWidth < 768) {
+                        return `${address.slice(0, 6)}...${address.slice(-4)}`;
+                    }
+                    return address;
+                },
+
+                formatTime(timestamp) {
+                    const date = new Date(timestamp * 1000);
+                    return date.toLocaleTimeString('zh-CN', {
+                        hour12: false,
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    });
+                },
+
+                // 新增相对时间格式化方法
+                formatDuration(seconds) {
+                    const units = [
+                        { value: 86400, label: '天' },
+                        { value: 3600, label: '小时' },
+                        { value: 60, label: '分' },
+                        { value: 1, label: '秒' }
+                    ];
+
+                    let output = [];
+                    let remaining = seconds;
+
+                    units.forEach(({ value, label }) => {
+                        const count = Math.floor(remaining / value);
+                        if (count > 0 || output.length > 0) {
+                            output.push(`${count}${label}`);
+                            remaining %= value;
+                        }
+                    });
+
+                    return output.join('') + '前';
+                },
+
+                // 更新后的时间显示方法
+                getTimeDisplay(timestamp) {
+                    const dateStr = this.formatTime(timestamp);
+                    const duration = this.formatDuration(
+                        Math.floor((this.currentTime - timestamp * 1000) / 1000)
+                    );
+                    return `${dateStr} (${duration})`;
+                },
+
+                toggleDarkMode() {
+                    this.isDarkMode = !this.isDarkMode;
+                    localStorage.setItem('darkMode', this.isDarkMode);
+                },
+
+                applyDarkMode(isDark) {
+                    if (isDark) {
+                        document.documentElement.classList.add('dark');
+                        document.body.classList.add('dark:bg-gray-900');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                        document.body.classList.remove('dark:bg-gray-900');
+                    }
+                },
+
+                handleSystemThemeChange(event) {
+                    if (!localStorage.getItem('darkMode')) {
+                        this.isDarkMode = event.matches;
+                    }
+                },
+
+                // 新增价格计算方法
+                calculatePrice(swap) {
+                    const amount0 = Math.abs(parseFloat(swap.amount0));
+                    const amount1 = Math.abs(parseFloat(swap.amount1));
+
+                    // 处理零值问题
+                    if (amount0 === 0 || amount1 === 0) return 'N/A';
+
+                    // 计算价格逻辑
+                    const isToken0In = swap.amount0 > 0;
+                    const price = amount0 / amount1;
+
+                    // 确定价格方向
+                    const direction = isToken0In ? '↓' : '↑';
+
+                    // 格式化输出
+                    return `${direction} ${this.formatPrice(price)}`;
+                },
+
+                // 价格格式化方法
+                formatPrice(value) {
+                    if (value >= 1000) {
+                        return value.toExponential(2);
+                    }
+                    if (value >= 0.01) {
+                        return value.toFixed(4).replace(/\.?0+$/, '');
+                    }
+                    return value.toExponential(3);
+                },
+
+                // 新增手动刷新方法
+                async manualRefresh() {
+                    if (this.isLoading) return;
+
+                    this.isLoading = true;
+                    this.refreshKey++; // 强制重新渲染图标
+                    try {
+                        this.currentTime = Date.now();
+                        await this.loadSwaps(true);
+                    } catch (error) {
+                        console.error('刷新失败:', error);
+                    } finally {
+                        // 添加动画结束延迟
+                        setTimeout(() => {
+                            this.isLoading = false;
+                        }, 800); // 匹配动画持续时间
+                    }
+                },
+            }
+        }).mount('#app');
+    </script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            // 其他配置...
+        }
+    </script>
+
+    <style>
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #1a202c;
+                color: #e2e8f0;
+            }
+        }
+
+        @media (prefers-color-scheme: light) {
+            body {
+                background-color: #fff;
+                color: #2d3748;
+            }
+        }
+
+        .dark body {
+            background-color: #1a202c;
+            color: #e2e8f0;
+        }
+
+        .mobile\:grid-cols-1 {
+            @media (max-width: 768px) {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .animate-spin {
+            animation: spin 0.8s linear;
+            animation-fill-mode: forwards;
+        }
+    </style>
+</body>
+
+</html>
