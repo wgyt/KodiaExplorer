@@ -51,7 +51,7 @@
             <!-- 交易历史 -->
             <div v-for="swap in filteredSwaps" :key="swap.transaction.id"
                 class="dark:bg-gray-800 bg-white rounded-lg p-4 mb-4 shadow-md hover:shadow-lg transition-shadow">
-                <a :href="`https://explorer.flame.astria.org/tx/${swap.transaction.id}`" target="_blank"
+                <a :href="`https://berascan.com/tx/${swap.transaction.id}`" target="_blank"
                     class="block dark:text-blue-400 text-blue-600 hover:underline">
                     <div class="flex justify-between items-center mb-2">
                         <span class="text-gray-600 dark:text-gray-400 text-sm">
