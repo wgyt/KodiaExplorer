@@ -7,7 +7,7 @@
     <link rel="apple-touch-icon" sizes="192x192" href="192x192_App_Icon.png">
     <link rel="apple-touch-icon" sizes="512x512" href="512x512_App_Icon.png">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kodia Swap Explorer</title>
+    <title>Kodia Explorer | Berachain</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
@@ -15,7 +15,8 @@
 <body class="h-full bg-white dark:bg-gray-900 transition-colors duration-300">
     <div id="app" :class="{'dark': isDarkMode}" class="min-h-screen transition-colors duration-300">
         <!-- 头部控制栏 -->
-        <header class="dark:bg-gray-900 bg-gray-100 p-4 flex justify-between items-center shadow-md">
+        <header
+            class="fixed top-0 left-0 right-0 z-50 dark:bg-gray-900 bg-gray-100 p-4 flex justify-between items-center shadow-md">
             <!-- 左侧：流动池选择器 -->
             <div class="flex-1 max-w-xs">
                 <select v-model="selectedPool" @change="handlePoolChange" class="bg-white text-gray-900 border-gray-300  /* 新增亮色模式基础样式 */
@@ -32,7 +33,7 @@
             <div class="mx-4">
                 <button @click="manualRefresh" class="p-2 rounded-full transition-colors">
                     <svg id="refresh-icon" :key="refreshKey" class="w-6 h-6 text-blue-500 dark:text-blue-400"
-                        :class="{ 'animate-spin': isLoading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        :class="{ 'animate-spin': loading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                             d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
@@ -47,7 +48,7 @@
             </div>
         </header>
 
-        <main class="p-4 max-w-6xl mx-auto h-[calc(100vh-80px)]">
+        <main class="mt-16 p-4 max-w-6xl mx-auto h-[calc(100vh-80px)]">
             <!-- 交易历史 -->
             <div v-for="swap in filteredSwaps" :key="swap.transaction.id"
                 class="dark:bg-gray-800 bg-white rounded-lg p-4 mb-4 shadow-md hover:shadow-lg transition-shadow">
@@ -286,22 +287,9 @@
                 // 新增change事件处理
                 handlePoolChange(event) {
                     console.log(this.selectedPool);
-                    // 显示加载状态
-                    this.isLoading = true;
-
-                    // 清空当前数据
-                    this.swaps = [];
-
-                    // 更新浏览器历史记录
-                    const newURL = new URL(window.location.href);
-                    newURL.searchParams.set('pool', this.selectedPool);
-                    window.history.replaceState({}, '', newURL);
 
                     // 发起数据请求
-                    this.loadSwaps(true).finally(() => {
-                        // 隐藏加载状态
-                        this.isLoading = false;
-                    });
+                    this.loadSwaps(true);
                 },
 
                 async loadPools() {
@@ -490,25 +478,21 @@
                     if (value >= 0.01) {
                         return value.toFixed(4).replace(/\.?0+$/, '');
                     }
+                    if (value >= 0.00000001) {
+                        return value.toFixed(8).replace(/\.?0+$/, '');
+                    }
                     return value.toExponential(3);
                 },
 
                 // 新增手动刷新方法
                 async manualRefresh() {
-                    if (this.isLoading) return;
-
-                    this.isLoading = true;
+                    if (this.loading) return;
                     this.refreshKey++; // 强制重新渲染图标
                     try {
                         this.currentTime = Date.now();
                         await this.loadSwaps(true);
                     } catch (error) {
                         console.error('刷新失败:', error);
-                    } finally {
-                        // 添加动画结束延迟
-                        setTimeout(() => {
-                            this.isLoading = false;
-                        }, 800); // 匹配动画持续时间
                     }
                 },
             }
@@ -560,6 +544,38 @@
         .animate-spin {
             animation: spin 0.8s linear;
             animation-fill-mode: forwards;
+        }
+
+        .transaction-container {
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* 调整移动端布局 */
+        @media (max-width: 640px) {
+            main {
+                margin-top: 12px;
+                padding-top: 4rem;
+                /* 减小顶部间距 */
+                height: calc(100vh - 60px);
+                /* 调整高度 */
+            }
+
+            header {
+                padding: 0.5rem;
+            }
+        }
+
+        /* 滚动条美化 */
+        main::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        main::-webkit-scrollbar-track {
+            @apply bg-gray-100 dark:bg-gray-800;
+        }
+
+        main::-webkit-scrollbar-thumb {
+            @apply bg-gray-300 dark:bg-gray-600 rounded-full;
         }
     </style>
 </body>
